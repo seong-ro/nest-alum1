@@ -1,0 +1,19 @@
+# GitHub Sponsors 등 후원 채널 설정
+# 본 프로젝트는 자발적 무료 봉사 운영이 원칙이므로 모든 항목 주석 처리.
+# 동문이 자발적으로 후원하고 싶을 때 대비한 채널 준비.
+#
+# ⚠️ 활성화 시 Vercel "commercial use" 정책 재검토 필요.
+#
+# 활성화하려면 아래 주석을 해제하고 GitHub username 등을 입력.
+
+# github: [seong-ro]                  # GitHub Sponsors
+# patreon:                             # Patreon username
+# open_collective:                     # Open Collective username
+# ko_fi:                               # Ko-fi username
+# tidelift:                            # tidelift platform-name/package-name
+# community_bridge:                    # Community Bridge project name
+# liberapay:                           # Liberapay username
+# issuehunt:                           # IssueHunt username
+# otechie:                             # Otechie username
+# lfx_crowdfunding:                    # LFX Crowdfunding project-name
+# custom: ['https://water-ria.vercel.app']  # custom URL
