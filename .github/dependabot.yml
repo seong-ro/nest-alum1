@@ -1,0 +1,85 @@
+# Dependabot — GitHub 무료 보안·종속성 자동화
+# https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+#
+# public/private repo 모두 무료, 무제한
+# 매주 월요일 KST 09:00에 종속성 검사 → PR 자동 생성
+#
+# 정책: major 버전 업그레이드는 자동 차단 (breaking change 위험)
+#       사용자가 명시적으로 검토 후 수동 업그레이드
+
+version: 2
+
+updates:
+  # npm 종속성 (Next.js·React·기타)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "00:00"
+      timezone: "Asia/Seoul"
+    open-pull-requests-limit: 5
+    versioning-strategy: "increase-if-necessary"
+
+    # ⚠️ Major 업그레이드 차단 — breaking change 방지
+    # 빌드 실패한 v2.16.0 사례 대응:
+    #   - tailwindcss v4: PostCSS plugin 분리 (@tailwindcss/postcss 필요)
+    #   - eslint v10: eslint-config-next는 v7~v9만 peer 지원
+    #   - typescript v6: CSS side-effect import 타입 추론 변경
+    # 보수적 정책: 모든 패키지의 major 업그레이드를 자동 차단.
+    # major 업그레이드 필요 시 운영자가 수동 검토 후 적용.
+    ignore:
+      # 모든 패키지의 major 버전 업그레이드 자동 차단 (가장 안전)
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+    # Next.js·React 등 minor/patch만 그룹화하여 한 PR로
+    groups:
+      next-react:
+        patterns:
+          - "next*"
+          - "react*"
+          - "@types/react*"
+        update-types:
+          - "minor"
+          - "patch"
+      tailwind:
+        patterns:
+          - "tailwindcss"
+          - "@tailwindcss/*"
+          - "postcss"
+          - "autoprefixer"
+        update-types:
+          - "minor"
+          - "patch"
+      types:
+        patterns:
+          - "@types/*"
+        update-types:
+          - "minor"
+          - "patch"
+    labels:
+      - "dependencies"
+      - "automated"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+
+  # GitHub Actions 종속성
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      day: "monday"
+      time: "00:00"
+      timezone: "Asia/Seoul"
+    open-pull-requests-limit: 3
+    # actions/checkout, actions/setup-node 등의 major 업그레이드도 자동 차단
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    labels:
+      - "github-actions"
+      - "automated"
+    commit-message:
+      prefix: "ci"
