@@ -1,0 +1,52 @@
+# ------------------------------------------------------------
+# 선택적 워크플로: Vercel GitHub App을 쓰지 않고 직접 배포하고 싶을 때만 사용
+#
+# 기본은 Vercel GitHub App(Import Project) 방식을 권장합니다.
+# 이 워크플로는 CLI 기반 배포가 필요한 경우만 활성화하세요.
+#
+# 활성화:
+#   1) 파일명을 vercel-deploy.yml 로 변경
+#   2) Repo Settings → Secrets and variables → Actions 에서:
+#      - VERCEL_TOKEN     (https://vercel.com/account/tokens 에서 생성)
+#      - VERCEL_ORG_ID    (vercel link 후 .vercel/project.json 의 orgId)
+#      - VERCEL_PROJECT_ID (.vercel/project.json 의 projectId)
+#   3) push 하면 자동 배포
+# ------------------------------------------------------------
+name: Vercel Deploy (optional)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy to Vercel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Pull Vercel env
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      - name: Build
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      - name: Deploy
+        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}

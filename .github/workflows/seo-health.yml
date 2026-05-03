@@ -1,0 +1,132 @@
+name: Sitemap & LLMs.txt Health Check
+
+# 매주 월요일 KST 09:00 (UTC 00:00) sitemap·llms.txt·robots.txt 무료 검증
+# 검색엔진 인덱싱 + AI 답변 엔진 (ChatGPT·Claude·Perplexity) 친화도 유지
+# public repo Actions 무제한 무료
+
+on:
+  schedule:
+    - cron: "0 0 * * 1"  # 매주 월요일 UTC 00:00 = KST 09:00
+  workflow_dispatch:  # 수동 실행 가능
+
+jobs:
+  check-seo-files:
+    name: Verify SEO/GEO files are accessible
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check sitemap.xml
+        id: sitemap
+        run: |
+          URL="https://nest-alum1.vercel.app/sitemap.xml"
+          echo "Checking $URL"
+          STATUS=$(curl -s -o /tmp/sitemap.xml -w "%{http_code}" "$URL")
+          echo "HTTP Status: $STATUS"
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Sitemap returned $STATUS, expected 200"
+            exit 1
+          fi
+          # XML 형식 기본 검증
+          if ! grep -q "<urlset" /tmp/sitemap.xml; then
+            echo "::error::Sitemap doesn't contain <urlset> tag"
+            cat /tmp/sitemap.xml | head -20
+            exit 1
+          fi
+          # 비표준 <script/> 태그 검증 (이전 v2.13.5에서 발생한 문제)
+          if grep -q "<script" /tmp/sitemap.xml; then
+            echo "::warning::Sitemap contains <script> tag (Vercel auto-injection)"
+          fi
+          # 카드 수 카운트
+          URL_COUNT=$(grep -c "<url>" /tmp/sitemap.xml || echo 0)
+          echo "URL count in sitemap: $URL_COUNT"
+          echo "url_count=$URL_COUNT" >> $GITHUB_OUTPUT
+
+      - name: Check robots.txt
+        run: |
+          URL="https://nest-alum1.vercel.app/robots.txt"
+          echo "Checking $URL"
+          STATUS=$(curl -s -o /tmp/robots.txt -w "%{http_code}" "$URL")
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::robots.txt returned $STATUS"
+            exit 1
+          fi
+          # 필수 필드 검증
+          if ! grep -q "User-agent" /tmp/robots.txt; then
+            echo "::error::robots.txt missing User-agent"
+            exit 1
+          fi
+          if ! grep -q "Sitemap:" /tmp/robots.txt; then
+            echo "::error::robots.txt missing Sitemap"
+            exit 1
+          fi
+
+      - name: Check llms.txt (GEO standard)
+        run: |
+          URL="https://nest-alum1.vercel.app/llms.txt"
+          echo "Checking $URL"
+          STATUS=$(curl -s -o /tmp/llms.txt -w "%{http_code}" "$URL")
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::llms.txt returned $STATUS"
+            exit 1
+          fi
+          # llms.txt 표준 검증
+          if ! head -1 /tmp/llms.txt | grep -q "^# "; then
+            echo "::error::llms.txt first line must be H1 (# Title)"
+            exit 1
+          fi
+          # 100KB 한도 체크
+          SIZE=$(wc -c < /tmp/llms.txt)
+          echo "llms.txt size: $SIZE bytes"
+          if [ "$SIZE" -gt 102400 ]; then
+            echo "::warning::llms.txt exceeds 100KB recommended limit"
+          fi
+
+      - name: Summary
+        run: |
+          echo "## SEO/GEO Files Health Check ✓" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| File | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| sitemap.xml | ✅ Accessible (${{ steps.sitemap.outputs.url_count }} URLs) |" >> $GITHUB_STEP_SUMMARY
+          echo "| robots.txt | ✅ Accessible |" >> $GITHUB_STEP_SUMMARY
+          echo "| llms.txt | ✅ Accessible |" >> $GITHUB_STEP_SUMMARY
+
+  check-card-links:
+    name: Verify card source URLs are alive
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Fetch sitemap
+        run: curl -s "https://nest-alum1.vercel.app/sitemap.xml" -o /tmp/sitemap.xml
+
+      - name: Extract card URLs
+        id: extract
+        run: |
+          # sitemap에서 카드 URL 추출 (메인 페이지 제외)
+          grep -oP '(?<=<loc>)[^<]+' /tmp/sitemap.xml | \
+            grep -v "^https://nest-alum1.vercel.app$" | \
+            grep -v "^https://nest-alum1.vercel.app/$" > /tmp/card-urls.txt || true
+          COUNT=$(wc -l < /tmp/card-urls.txt)
+          echo "Card URLs found: $COUNT"
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
+
+      - name: Check each card page
+        run: |
+          if [ ! -s /tmp/card-urls.txt ]; then
+            echo "No card URLs to check (sitemap may be empty)"
+            exit 0
+          fi
+          DEAD=0
+          while IFS= read -r URL; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL?$(date +%s)")
+            if [ "$STATUS" != "200" ]; then
+              echo "::warning::Card $URL returned $STATUS"
+              DEAD=$((DEAD + 1))
+            fi
+          done < /tmp/card-urls.txt
+          echo "Dead cards: $DEAD"
+          if [ "$DEAD" -gt 0 ]; then
+            echo "::warning::$DEAD card(s) returned non-200 status"
+          fi
