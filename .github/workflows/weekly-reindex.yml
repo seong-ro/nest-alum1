@@ -1,0 +1,82 @@
+name: Weekly IndexNow Reindex
+
+# v2.56.0: 매주 모든 카드를 IndexNow에 재ping
+#
+# 목적:
+#  - 카드 등록 시점에 INDEXNOW_KEY 없었거나 ping 실패한 카드 구제
+#  - 검색엔진(Bing/Naver/Yandex)의 색인 상태 주기적 갱신
+#  - freshness 시그널 강화 — 검색엔진이 사이트가 살아있다고 인식
+#
+# 동작:
+#  1. POST /api/admin/reindex-all 호출 (ADMIN_DASHBOARD_PASSWORD 인증)
+#  2. 메인 + sitemap + about + 모든 카드 URL을 IndexNow에 일괄 ping
+#  3. 결과 로그 + step summary 생성
+#
+# 보안:
+#  - ADMIN_DASHBOARD_PASSWORD는 GitHub Secrets에 저장
+#  - 응답에 카드 정보 X (URL 통계만 — 안전)
+
+on:
+  schedule:
+    - cron: "0 18 * * 0"  # 매주 일요일 UTC 18:00 = KST 월요일 03:00
+  workflow_dispatch:  # 수동 실행 버튼
+
+permissions:
+  contents: read  # 데이터 변경 X — read-only
+
+jobs:
+  reindex:
+    name: Reindex all cards via IndexNow
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Trigger reindex API
+        env:
+          ADMIN_DASHBOARD_PASSWORD: ${{ secrets.ADMIN_DASHBOARD_PASSWORD }}
+          API_BASE: ${{ vars.API_BASE || 'https://nest-alum1.vercel.app' }}
+        run: |
+          if [ -z "$ADMIN_DASHBOARD_PASSWORD" ]; then
+            echo "::error title=GitHub Secret 누락::ADMIN_DASHBOARD_PASSWORD가 설정되지 않았습니다."
+            echo ""
+            echo "  GitHub Secrets에 ADMIN_DASHBOARD_PASSWORD 추가 필요:"
+            echo "  https://github.com/${GITHUB_REPOSITORY}/settings/secrets/actions"
+            exit 1
+          fi
+
+          echo "Triggering reindex at $API_BASE/api/admin/reindex-all"
+
+          # URL-encode the password to handle special characters
+          ENCODED_PW=$(printf '%s' "$ADMIN_DASHBOARD_PASSWORD" | jq -sRr @uri)
+
+          RESPONSE=$(curl -sS -X POST -w "\n%{http_code}" \
+            "$API_BASE/api/admin/reindex-all?password=$ENCODED_PW")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n 1)
+          BODY=$(echo "$RESPONSE" | head -n -1)
+
+          echo "HTTP $HTTP_CODE"
+          echo "$BODY" | jq . || echo "$BODY"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Reindex API returned $HTTP_CODE"
+            exit 1
+          fi
+
+          # 응답 파싱 → step summary
+          TOTAL_CARDS=$(echo "$BODY" | jq -r '.totalCards // 0')
+          URLS_COUNT=$(echo "$BODY" | jq -r '.urlsCount // 0')
+          INDEXNOW_STATUS=$(echo "$BODY" | jq -r '.indexNowStatus // 0')
+
+          echo "::notice::IndexNow reindex succeeded: $URLS_COUNT URLs across $TOTAL_CARDS cards (HTTP $INDEXNOW_STATUS)"
+
+          {
+            echo "## Weekly Reindex 🔍"
+            echo ""
+            echo "- **Total cards**: $TOTAL_CARDS"
+            echo "- **URLs pinged**: $URLS_COUNT"
+            echo "- **IndexNow status**: $INDEXNOW_STATUS"
+            echo "- **Providers**: Bing · Naver · Yandex · Seznam · Yep"
+            echo ""
+            echo "검색엔진 색인 갱신까지 1~5분 소요. Google은 sitemap.xml 갱신으로 1~7일 내 자연 발견."
+          } >> $GITHUB_STEP_SUMMARY

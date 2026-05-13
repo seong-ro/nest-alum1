@@ -1,0 +1,191 @@
+name: Daily Card Backup
+
+# v2.46.0: 매일 카드 데이터를 백업하여 backups/ 폴더에 저장.
+# 사용자 직접 편집 카드(userEdited=true) 우선 보호.
+#
+# 보안:
+#  - ADMIN_DASHBOARD_PASSWORD를 GitHub Secrets에 저장 (코드 노출 X)
+#  - 백업 파일에 카드 정보(연락처 등) 포함되므로 PRIVATE repo 권장
+#
+# 동작:
+#  1. /api/admin/dump 호출 → JSON 응답 받음
+#  2. backups/YYYY/MM/folio-cards-YYYY-MM-DD.json 으로 저장
+#  3. backups/latest.json 도 갱신 (간편 다운로드용)
+#  4. backups/ 폴더만 변경 시 commit + push (deploy 없음)
+#
+# 보존 정책: 모든 백업 보존 (Git 히스토리에 자동 기록)
+#  - 필요 시 backups/YYYY/MM/ 디렉토리 단위로 압축·삭제 가능
+
+on:
+  schedule:
+    - cron: "0 17 * * *"  # 매일 UTC 17:00 = KST 02:00
+  workflow_dispatch:  # 수동 실행 버튼
+
+permissions:
+  contents: write  # backups/ 폴더 commit/push 권한
+
+# v2.52.0: actions/checkout@v5 (Node.js 24 native) 사용 → FORCE 환경변수 불필요
+
+jobs:
+  backup:
+    name: Fetch and commit daily backup
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch backup from API
+        env:
+          ADMIN_DASHBOARD_PASSWORD: ${{ secrets.ADMIN_DASHBOARD_PASSWORD }}
+          API_BASE: ${{ vars.API_BASE || 'https://nest-alum1.vercel.app' }}
+        run: |
+          if [ -z "$ADMIN_DASHBOARD_PASSWORD" ]; then
+            echo "::error title=GitHub Secret 누락::ADMIN_DASHBOARD_PASSWORD가 GitHub Secrets에 설정되지 않았습니다."
+            echo ""
+            echo "==============================================================="
+            echo "🔧 해결 방법 (1분 소요)"
+            echo "==============================================================="
+            echo ""
+            echo "❗ 주의: 이 비밀번호는 두 곳에 따로 등록해야 합니다."
+            echo "   1) Vercel 환경변수 (admin API 인증용) — 이미 설정된 듯합니다"
+            echo "   2) GitHub Secret (이 워크플로우가 사용) — ⚠️ 여기가 비어 있어요!"
+            echo ""
+            echo "📋 GitHub Secret 추가 절차:"
+            echo "   1. https://github.com/${GITHUB_REPOSITORY}/settings/secrets/actions"
+            echo "   2. [New repository secret] 클릭"
+            echo "   3. Name:  ADMIN_DASHBOARD_PASSWORD"
+            echo "   4. Value: <Vercel에 설정한 ADMIN_DASHBOARD_PASSWORD와 같은 값>"
+            echo "   5. [Add secret] 클릭"
+            echo "   6. Actions 탭에서 이 워크플로우 [Re-run]"
+            echo ""
+            echo "🔒 비밀번호 정책:"
+            echo "   - GitHub Secret은 로그·diff·UI에 표시되지 않습니다 (안전)"
+            echo "   - Vercel 환경변수와 동일한 값으로 설정 필수"
+            echo "==============================================================="
+            exit 1
+          fi
+
+          DATE=$(date -u +%Y-%m-%d)
+          YEAR=$(date -u +%Y)
+          MONTH=$(date -u +%m)
+          BACKUP_DIR="backups/$YEAR/$MONTH"
+          BACKUP_FILE="$BACKUP_DIR/folio-cards-$DATE.json"
+
+          mkdir -p "$BACKUP_DIR"
+
+          # v2.55.7: 비밀번호 trim — Vercel/GitHub에 공백/줄바꿈이 섞여있을 수 있음
+          ADMIN_DASHBOARD_PASSWORD=$(echo -n "$ADMIN_DASHBOARD_PASSWORD" | tr -d '[:space:]')
+
+          echo "Fetching backup from $API_BASE/api/admin/dump"
+          echo "Password length: ${#ADMIN_DASHBOARD_PASSWORD} characters"
+
+          HTTP_CODE=$(curl -sS -o "$BACKUP_FILE" -w "%{http_code}" \
+            -H "Authorization: Bearer $ADMIN_DASHBOARD_PASSWORD" \
+            "$API_BASE/api/admin/dump")
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::API returned $HTTP_CODE"
+            echo ""
+            echo "==============================================================="
+            echo "🔧 HTTP $HTTP_CODE 진단"
+            echo "==============================================================="
+            if [ "$HTTP_CODE" = "401" ]; then
+              echo ""
+              echo "❌ 401 Unauthorized — 비밀번호 불일치"
+              echo ""
+              echo "원인: GitHub Secret ADMIN_DASHBOARD_PASSWORD 값과"
+              echo "      Vercel 환경변수 ADMIN_DASHBOARD_PASSWORD 값이 다릅니다."
+              echo ""
+              echo "✅ 해결 절차 (양쪽 값 일치시키기):"
+              echo ""
+              echo "  1. Vercel Dashboard에서 현재 값 확인:"
+              echo "     https://vercel.com/dashboard → 프로젝트 → Settings"
+              echo "     → Environment Variables → ADMIN_DASHBOARD_PASSWORD"
+              echo "     → [...] 메뉴 → 'Reveal' 또는 'Edit'으로 값 확인"
+              echo ""
+              echo "  2. GitHub Secret을 Vercel과 같은 값으로 업데이트:"
+              echo "     https://github.com/${GITHUB_REPOSITORY}/settings/secrets/actions"
+              echo "     → ADMIN_DASHBOARD_PASSWORD → Update"
+              echo "     → 정확히 같은 값 (앞뒤 공백 없이) 입력"
+              echo ""
+              echo "  3. 이 워크플로우 [Re-run all jobs]"
+              echo ""
+              echo "💡 팁: 비밀번호에 공백·줄바꿈·특수문자가 있는 경우 충돌 가능."
+              echo "       단순 ASCII 영숫자만 사용 권장."
+            elif [ "$HTTP_CODE" = "503" ]; then
+              echo ""
+              echo "❌ 503 Service Unavailable"
+              echo "원인: Vercel에 ADMIN_DASHBOARD_PASSWORD가 설정되지 않음"
+              echo "또는 Upstash Redis 연결 실패."
+              echo ""
+              echo "Vercel 환경변수 점검 후 Redeploy 필요."
+            elif [ "$HTTP_CODE" = "404" ]; then
+              echo ""
+              echo "❌ 404 Not Found"
+              echo "원인: API_BASE URL 잘못 또는 사이트 미배포"
+              echo "현재 API_BASE: $API_BASE"
+            fi
+            echo ""
+            echo "==============================================================="
+            echo "API 응답 본문 (디버그용):"
+            cat "$BACKUP_FILE"
+            echo ""
+            echo "==============================================================="
+            rm -f "$BACKUP_FILE"
+            exit 1
+          fi
+
+          # 응답 검증
+          if ! jq -e '.ok == true' "$BACKUP_FILE" > /dev/null; then
+            echo "::error::Backup response is not ok=true"
+            cat "$BACKUP_FILE" | jq .
+            rm -f "$BACKUP_FILE"
+            exit 1
+          fi
+
+          TOTAL=$(jq -r '.total' "$BACKUP_FILE")
+          USER_EDITED=$(jq -r '.userEditedCount' "$BACKUP_FILE")
+
+          echo "✓ Backup saved: $BACKUP_FILE"
+          echo "  Total cards: $TOTAL"
+          echo "  User-edited: $USER_EDITED"
+
+          # latest.json도 갱신
+          cp "$BACKUP_FILE" backups/latest.json
+          echo "✓ Updated backups/latest.json"
+
+          # Step Summary
+          {
+            echo "## Daily Backup 🛡️"
+            echo ""
+            echo "- **Date**: $DATE (UTC)"
+            echo "- **Total cards**: $TOTAL"
+            echo "- **User-edited cards**: $USER_EDITED"
+            echo "- **File**: \`$BACKUP_FILE\`"
+            echo ""
+            echo "Latest backup also saved to \`backups/latest.json\`"
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Commit and push backup
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # backups/ 폴더 변경만 commit (소스 변경 없음 → deploy 트리거 X)
+          git add backups/
+
+          if git diff --cached --quiet; then
+            echo "✓ No changes (backup unchanged from yesterday)"
+            exit 0
+          fi
+
+          DATE=$(date -u +%Y-%m-%d)
+          git commit -m "chore(backup): daily card backup $DATE [skip ci]" \
+                     -m "Auto-generated by .github/workflows/daily-backup.yml"
+
+          git push origin HEAD:main
+          echo "✓ Pushed backup commit"
